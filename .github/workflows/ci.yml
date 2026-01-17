@@ -125,7 +125,7 @@ jobs:
           NODE_ENV: test
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./backend/coverage/lcov.info
           flags: backend
@@ -170,7 +170,7 @@ jobs:
         run: pnpm --filter mobile test -- --coverage --maxWorkers=2
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./mobile/coverage/lcov.info
           flags: mobile
@@ -215,7 +215,7 @@ jobs:
         run: pnpm --filter web test -- --coverage
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./web/coverage/lcov.info
           flags: web
