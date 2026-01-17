@@ -1,0 +1,97 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Mobile specific
+*.apk
+*.aab
+*.ipa
+.expo/
+ios/Pods/
+android/.gradle/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets (never commit these)
+*.pem
+*.key
+credentials.json
+service-account.json
+google-services.json
+GoogleService-Info.plist
+
+# Expo
+.expo/
+dist/
+web-build/
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+
+# Turborepo
+.turbo
+
+# Vercel
+.vercel
+
+# Prisma
+prisma/*.db
+prisma/*.db-journal
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor directories
+*.sublime-workspace
+*.sublime-project
+
+# Optional npm cache
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# TypeScript cache
+*.tsbuildinfo

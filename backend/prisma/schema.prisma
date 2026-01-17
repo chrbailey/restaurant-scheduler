@@ -1,0 +1,1133 @@
+// Prisma schema for Restaurant Staff Scheduler
+// Uses PostgreSQL with Row-Level Security for multi-tenancy
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== IDENTITY ====================
+
+/// Global user identity (one per person across all restaurants)
+model User {
+  id            String    @id @default(uuid())
+  phone         String    @unique
+  email         String?   @unique
+  firstName     String    @map("first_name")
+  lastName      String    @map("last_name")
+  avatarUrl     String?   @map("avatar_url")
+  phoneVerified Boolean   @default(false) @map("phone_verified")
+  emailVerified Boolean   @default(false) @map("email_verified")
+  platformRole  String    @default("USER") @map("platform_role") // USER, ADMIN
+  locale        String    @default("en-US")
+  timezone      String    @default("America/New_York")
+  fcmTokens     String[]  @map("fcm_tokens")
+  lastLoginAt   DateTime? @map("last_login_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  workerProfiles      WorkerProfile[]
+  refreshTokens       RefreshToken[]
+  notifications       Notification[]
+  notificationPrefs   NotificationPreferences?
+  createdShifts       Shift[]                    @relation("CreatedBy")
+  resolvedClaims      ShiftClaim[]               @relation("ResolvedBy")
+  approvedSwaps       ShiftSwap[]                @relation("ApprovedBy")
+  reviewedTimeOff     TimeOffRequest[]           @relation("ReviewedBy")
+
+  @@map("users")
+}
+
+/// Worker profile at a specific restaurant (multi-employer support)
+model WorkerProfile {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  restaurantId String   @map("restaurant_id")
+  role         String   // OWNER, MANAGER, SUPERVISOR, WORKER
+  status       String   @default("PENDING_VERIFICATION") // ACTIVE, ON_LEAVE, TERMINATED, PENDING_VERIFICATION
+  tier         String   @default("SECONDARY") // PRIMARY, SECONDARY, ON_CALL
+  positions    String[] // SERVER, BARTENDER, LINE_COOK, etc.
+  hourlyRate   Decimal  @map("hourly_rate") @db.Decimal(10, 2)
+  hiredAt      DateTime @default(now()) @map("hired_at")
+  approvedById String?  @map("approved_by_id")
+
+  // Stats for reputation
+  shiftsCompleted  Int      @default(0) @map("shifts_completed")
+  noShowCount      Int      @default(0) @map("no_show_count")
+  lateCount        Int      @default(0) @map("late_count")
+  averageRating    Decimal  @default(3.0) @map("average_rating") @db.Decimal(3, 2)
+  ratingCount      Int      @default(0) @map("rating_count")
+  reliabilityScore Decimal  @default(3.0) @map("reliability_score") @db.Decimal(3, 2)
+  lastShiftAt      DateTime? @map("last_shift_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant        Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  certifications    Certification[]
+  availability      Availability[]
+  timeOffRequests   TimeOffRequest[]
+  assignedShifts    Shift[]          @relation("AssignedTo")
+  shiftClaims       ShiftClaim[]
+  shiftOffers       ShiftOffer[]
+  sourceSwaps       ShiftSwap[]      @relation("SourceWorker")
+  targetSwaps       ShiftSwap[]      @relation("TargetWorker")
+  crossTrainings    CrossTraining[]
+  instantPayEnrollment InstantPayEnrollment?
+  earnings          WorkerEarnings[]
+  tradeOffers       TradeOffer[]
+  tradeMatchesAsOfferer TradeMatch[] @relation("TradeMatchOfferer")
+  tradeMatchesAsAcceptor TradeMatch[] @relation("TradeMatchAcceptor")
+  negotiationsAsParticipant1 TradeNegotiation[] @relation("NegotiationParticipant1")
+  negotiationsAsParticipant2 TradeNegotiation[] @relation("NegotiationParticipant2")
+
+  @@unique([userId, restaurantId])
+  @@index([restaurantId, status])
+  @@index([restaurantId, tier])
+  @@map("worker_profiles")
+}
+
+/// Certification record
+model Certification {
+  id               String    @id @default(uuid())
+  workerProfileId  String    @map("worker_profile_id")
+  type             String    // FOOD_HANDLER, ALCOHOL_SERVICE, etc.
+  issuedAt         DateTime  @map("issued_at")
+  expiresAt        DateTime? @map("expires_at")
+  verificationUrl  String?   @map("verification_url")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  workerProfile WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+
+  @@map("certifications")
+}
+
+/// Availability preference
+model Availability {
+  id               String    @id @default(uuid())
+  workerProfileId  String    @map("worker_profile_id")
+  dayOfWeek        Int       @map("day_of_week") // 0 = Sunday
+  startTime        String    @map("start_time") // HH:MM
+  endTime          String    @map("end_time") // HH:MM
+  isPreferred      Boolean   @default(false) @map("is_preferred")
+  effectiveFrom    DateTime  @map("effective_from")
+  effectiveUntil   DateTime? @map("effective_until")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  workerProfile WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+
+  @@index([workerProfileId, dayOfWeek])
+  @@map("availability")
+}
+
+/// Time-off request
+model TimeOffRequest {
+  id               String    @id @default(uuid())
+  workerProfileId  String    @map("worker_profile_id")
+  startDate        DateTime  @map("start_date")
+  endDate          DateTime  @map("end_date")
+  allDay           Boolean   @default(true) @map("all_day")
+  startTime        String?   @map("start_time")
+  endTime          String?   @map("end_time")
+  reason           String?
+  status           String    @default("PENDING") // PENDING, APPROVED, REJECTED
+  reviewedById     String?   @map("reviewed_by_id")
+  reviewedAt       DateTime? @map("reviewed_at")
+  reviewNotes      String?   @map("review_notes")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  workerProfile WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  reviewedBy    User?         @relation("ReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([workerProfileId, status])
+  @@map("time_off_requests")
+}
+
+// ==================== AUTH ====================
+
+/// Refresh token for JWT rotation
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  token      String    @unique
+  deviceId   String    @map("device_id")
+  deviceName String?   @map("device_name")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deviceId])
+  @@map("refresh_tokens")
+}
+
+/// OTP verification code (short-lived, stored in Redis primarily)
+model OtpCode {
+  id        String   @id @default(uuid())
+  phone     String
+  code      String
+  attempts  Int      @default(0)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([phone])
+  @@map("otp_codes")
+}
+
+// ==================== RESTAURANT ====================
+
+/// Restaurant entity
+model Restaurant {
+  id            String  @id @default(uuid())
+  name          String
+
+  // Address
+  street        String
+  city          String
+  state         String
+  zipCode       String  @map("zip_code")
+  country       String  @default("US")
+  lat           Decimal @db.Decimal(10, 8)
+  lng           Decimal @db.Decimal(11, 8)
+
+  timezone      String  @default("America/New_York")
+  phone         String
+  email         String
+
+  // Network affiliation (optional direct link to primary network)
+  networkId     String? @map("network_id")
+
+  // Ghost kitchen
+  ghostKitchenEnabled       Boolean @default(false) @map("ghost_kitchen_enabled")
+  aggregatorIntegrationId   String? @map("aggregator_integration_id")
+  maxConcurrentOrders       Int     @default(20) @map("max_concurrent_orders")
+  enabledPlatforms          String[] @map("enabled_platforms") // DOORDASH, UBEREATS, GRUBHUB
+  autoDisableThreshold      Int     @default(90) @map("auto_disable_threshold") // Percentage
+
+  // Shift settings
+  requireClaimApproval      Boolean @default(true) @map("require_claim_approval")
+  autoApproveThreshold      Decimal @default(4.5) @map("auto_approve_threshold") @db.Decimal(3, 2)
+  networkVisibilityHours    Int     @default(2) @map("network_visibility_hours")
+  minReputationScore        Decimal @default(3.0) @map("min_reputation_score") @db.Decimal(3, 2)
+  allowCrossRestaurantSwaps Boolean @default(true) @map("allow_cross_restaurant_swaps")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  network             RestaurantNetwork?  @relation(fields: [networkId], references: [id], onDelete: SetNull)
+  workerProfiles      WorkerProfile[]
+  shifts              Shift[]
+  operatingHours      OperatingHours[]
+  ghostSessions       GhostKitchenSession[]
+  memberships         NetworkMembership[]
+  crossTrainingsAsTarget CrossTraining[]
+  workerEarnings      WorkerEarnings[]
+  analyticsSnapshots  AnalyticsSnapshot[]
+
+  @@index([networkId])
+  @@map("restaurants")
+}
+
+/// Operating hours by day
+model OperatingHours {
+  id           String  @id @default(uuid())
+  restaurantId String  @map("restaurant_id")
+  dayOfWeek    Int     @map("day_of_week") // 0 = Sunday
+  openTime     String  @map("open_time") // HH:MM
+  closeTime    String  @map("close_time") // HH:MM
+  isClosed     Boolean @default(false) @map("is_closed")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, dayOfWeek])
+  @@map("operating_hours")
+}
+
+/// Restaurant network for cross-restaurant scheduling
+model RestaurantNetwork {
+  id          String  @id @default(uuid())
+  name        String
+  description String?
+
+  // Network settings - explicit fields for type safety
+  shiftSharingEnabled       Boolean @default(true) @map("shift_sharing_enabled")
+  enableCrossRestaurantShifts Boolean @default(true) @map("enable_cross_restaurant_shifts")
+  autoApproveThreshold      Decimal @default(4.0) @map("auto_approve_threshold") @db.Decimal(3, 2)
+  visibilityDelayHours      Int     @default(2) @map("visibility_delay_hours")
+  maxDistanceMiles          Int     @default(25) @map("max_distance_miles")
+  requireCrossTraining      Boolean @default(true) @map("require_cross_training")
+  minHomeShifts             Int     @default(10) @map("min_home_shifts")
+  minNetworkReputationScore Decimal @default(3.0) @map("min_network_reputation_score") @db.Decimal(3, 2)
+
+  // Legacy settings JSON for backward compatibility
+  settings    Json    @default("{}")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  restaurants Restaurant[]       // Direct relation for primary network affiliation
+  memberships NetworkMembership[]
+
+  @@map("restaurant_networks")
+}
+
+/// Network membership linking restaurants to networks
+model NetworkMembership {
+  id           String   @id @default(uuid())
+  networkId    String   @map("network_id")
+  restaurantId String   @map("restaurant_id")
+  role         String   @default("MEMBER") // OWNER, ADMIN, MEMBER
+  status       String   @default("PENDING") // ACTIVE, PENDING, SUSPENDED
+  joinedAt     DateTime @default(now()) @map("joined_at")
+  invitedById  String?  @map("invited_by_id")
+  respondedAt  DateTime? @map("responded_at")
+
+  // Relations
+  network    RestaurantNetwork @relation(fields: [networkId], references: [id], onDelete: Cascade)
+  restaurant Restaurant        @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([networkId, restaurantId])
+  @@index([restaurantId])
+  @@index([networkId, status])
+  @@map("network_memberships")
+}
+
+/// Cross-training certification for workers at network restaurants
+model CrossTraining {
+  id                 String    @id @default(uuid())
+  workerProfileId    String    @map("worker_profile_id")
+  targetRestaurantId String    @map("target_restaurant_id")
+  positions          String[]  // Positions worker is certified for at target
+  status             String    @default("PENDING") // PENDING, APPROVED, REJECTED, REVOKED, EXPIRED
+  certifiedAt        DateTime? @map("certified_at")
+  certifiedBy        String?   @map("certified_by")
+  notes              String?
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  workerProfile    WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  targetRestaurant Restaurant    @relation(fields: [targetRestaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([workerProfileId, targetRestaurantId])
+  @@index([targetRestaurantId, status])
+  @@index([workerProfileId, status])
+  @@map("cross_trainings")
+}
+
+// ==================== SCHEDULING ====================
+
+/// Shift entity with state machine
+model Shift {
+  id            String   @id @default(uuid())
+  restaurantId  String   @map("restaurant_id")
+  position      String   // SERVER, BARTENDER, etc.
+  status        String   @default("DRAFT") // State machine
+  type          String   @default("DINE_IN") // DINE_IN, GHOST_KITCHEN, HYBRID
+
+  startTime     DateTime @map("start_time")
+  endTime       DateTime @map("end_time")
+  breakMinutes  Int      @default(0) @map("break_minutes")
+
+  assignedToId  String?  @map("assigned_to_id")
+  notes         String?
+
+  autoApprove          Boolean @default(false) @map("auto_approve")
+  minReputationScore   Decimal? @map("min_reputation_score") @db.Decimal(3, 2)
+  hourlyRateOverride   Decimal? @map("hourly_rate_override") @db.Decimal(10, 2)
+
+  createdById   String   @map("created_by_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  restaurant    Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  assignedTo    WorkerProfile?  @relation("AssignedTo", fields: [assignedToId], references: [id])
+  createdBy     User            @relation("CreatedBy", fields: [createdById], references: [id])
+  claims        ShiftClaim[]
+  offers        ShiftOffer[]
+  sourceSwaps   ShiftSwap[]     @relation("SourceShift")
+  targetSwaps   ShiftSwap[]     @relation("TargetShift")
+  statusHistory ShiftStatusHistory[]
+  earnings      WorkerEarnings?
+  tradeOffers   TradeOffer[]
+  tradeMatchesAsOfferer TradeMatch[] @relation("TradeMatchOffererShift")
+  tradeMatchesAsAcceptor TradeMatch[] @relation("TradeMatchAcceptorShift")
+
+  @@index([restaurantId, status])
+  @@index([restaurantId, startTime])
+  @@index([assignedToId])
+  @@map("shifts")
+}
+
+/// Shift status history for audit trail
+model ShiftStatusHistory {
+  id         String   @id @default(uuid())
+  shiftId    String   @map("shift_id")
+  fromStatus String   @map("from_status")
+  toStatus   String   @map("to_status")
+  reason     String?
+  changedBy  String?  @map("changed_by") // User ID or 'SYSTEM'
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([shiftId])
+  @@map("shift_status_history")
+}
+
+/// Shift claim from a worker
+model ShiftClaim {
+  id               String    @id @default(uuid())
+  shiftId          String    @map("shift_id")
+  workerProfileId  String    @map("worker_profile_id")
+  priorityScore    Int       @map("priority_score")
+  status           String    @default("PENDING") // PENDING, APPROVED, REJECTED, EXPIRED
+  rejectionReason  String?   @map("rejection_reason")
+  notes            String?
+  claimedAt        DateTime  @default(now()) @map("claimed_at")
+  resolvedAt       DateTime? @map("resolved_at")
+  resolvedById     String?   @map("resolved_by_id")
+
+  shift         Shift         @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  workerProfile WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  resolvedBy    User?         @relation("ResolvedBy", fields: [resolvedById], references: [id])
+
+  @@unique([shiftId, workerProfileId])
+  @@index([shiftId, status])
+  @@map("shift_claims")
+}
+
+/// Shift offer to specific workers
+model ShiftOffer {
+  id               String    @id @default(uuid())
+  shiftId          String    @map("shift_id")
+  workerProfileId  String    @map("worker_profile_id")
+  status           String    @default("PENDING") // PENDING, ACCEPTED, DECLINED, EXPIRED
+  message          String?
+  expiresAt        DateTime  @map("expires_at")
+  respondedAt      DateTime? @map("responded_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  shift         Shift         @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  workerProfile WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([shiftId, workerProfileId])
+  @@index([workerProfileId, status])
+  @@map("shift_offers")
+}
+
+/// Shift swap between workers
+model ShiftSwap {
+  id               String    @id @default(uuid())
+  sourceShiftId    String    @map("source_shift_id")
+  sourceWorkerId   String    @map("source_worker_id")
+  targetShiftId    String?   @map("target_shift_id")
+  targetWorkerId   String?   @map("target_worker_id")
+  status           String    @default("PENDING") // PENDING, ACCEPTED, REJECTED, CANCELLED, EXPIRED
+  requiresApproval Boolean   @default(true) @map("requires_approval")
+  managerApproved  Boolean?  @map("manager_approved")
+  approvedById     String?   @map("approved_by_id")
+  message          String?
+  expiresAt        DateTime  @map("expires_at")
+  resolvedAt       DateTime? @map("resolved_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  sourceShift   Shift          @relation("SourceShift", fields: [sourceShiftId], references: [id], onDelete: Cascade)
+  targetShift   Shift?         @relation("TargetShift", fields: [targetShiftId], references: [id])
+  sourceWorker  WorkerProfile  @relation("SourceWorker", fields: [sourceWorkerId], references: [id], onDelete: Cascade)
+  targetWorker  WorkerProfile? @relation("TargetWorker", fields: [targetWorkerId], references: [id])
+  approvedBy    User?          @relation("ApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([sourceShiftId])
+  @@index([sourceWorkerId, status])
+  @@map("shift_swaps")
+}
+
+// ==================== NOTIFICATIONS ====================
+
+/// Notification record
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  type      String   // SHIFT_ASSIGNED, SWAP_REQUEST, etc.
+  urgency   String   // CRITICAL, HIGH, NORMAL, LOW
+  title     String
+  body      String
+  data      Json     @default("{}")
+  read      Boolean  @default(false)
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+/// Notification delivery status
+model NotificationDelivery {
+  id             String    @id @default(uuid())
+  notificationId String    @map("notification_id")
+  channel        String    // PUSH, SMS, EMAIL
+  status         String    @default("PENDING") // PENDING, SENT, DELIVERED, FAILED
+  sentAt         DateTime? @map("sent_at")
+  deliveredAt    DateTime? @map("delivered_at")
+  error          String?
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([notificationId])
+  @@map("notification_deliveries")
+}
+
+/// User notification preferences
+model NotificationPreferences {
+  id                String   @id @default(uuid())
+  userId            String   @unique @map("user_id")
+  quietHoursEnabled Boolean  @default(true) @map("quiet_hours_enabled")
+  quietHoursStart   String   @default("23:00") @map("quiet_hours_start")
+  quietHoursEnd     String   @default("07:00") @map("quiet_hours_end")
+  maxPerHour        Int      @default(20) @map("max_per_hour")
+  batchLowUrgency   Boolean  @default(true) @map("batch_low_urgency")
+  typePreferences   Json     @default("{}") @map("type_preferences")
+  positionFilter    String[] @map("position_filter")
+  maxDistanceMiles  Int?     @map("max_distance_miles")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+// ==================== GHOST KITCHEN ====================
+
+/// Ghost kitchen session record
+model GhostKitchenSession {
+  id               String    @id @default(uuid())
+  restaurantId     String    @map("restaurant_id")
+  startedAt        DateTime  @default(now()) @map("started_at")
+  endedAt          DateTime? @map("ended_at")
+  scheduledEndAt   DateTime? @map("scheduled_end_at")
+  platforms        String[]
+  maxOrders        Int       @map("max_orders")
+  status           String    @default("ACTIVE") // ACTIVE, PAUSED, ENDED
+
+  // Session configuration (stored as JSON for flexibility)
+  config           Json      @default("{}")
+
+  // Session stats
+  totalOrders          Int       @default(0) @map("total_orders")
+  totalRevenue         Decimal   @default(0) @map("total_revenue") @db.Decimal(12, 2)
+  totalPrepTime        Int       @default(0) @map("total_prep_time") // total seconds for avg calc
+  avgPrepTime          Int?      @map("avg_prep_time") // seconds
+  peakConcurrentOrders Int       @default(0) @map("peak_concurrent_orders")
+  peakUtilization      Int?      @map("peak_utilization") // percentage
+
+  // Platform breakdown stored as JSON
+  platformBreakdown    Json      @default("{}") @map("platform_breakdown")
+
+  // Pause tracking
+  pausedAt         DateTime? @map("paused_at")
+  pauseReason      String?   @map("pause_reason")
+  pauseEndTime     DateTime? @map("pause_end_time") // Scheduled resume time
+
+  startedByUserId  String    @map("started_by_user_id")
+  endedByUserId    String?   @map("ended_by_user_id")
+  endReason        String?   @map("end_reason") // MANUAL, CAPACITY, SCHEDULED, ERROR
+
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  orders     GhostKitchenOrder[]
+
+  @@index([restaurantId, startedAt])
+  @@index([restaurantId, status])
+  @@map("ghost_kitchen_sessions")
+}
+
+/// Ghost kitchen order from aggregator
+model GhostKitchenOrder {
+  id               String   @id @default(uuid())
+  sessionId        String   @map("session_id")
+  externalOrderId  String   @map("external_order_id")
+  platform         String   // DOORDASH, UBEREATS, GRUBHUB
+
+  // Order status (state machine)
+  status           String   @default("RECEIVED") // RECEIVED, ACCEPTED, PREPARING, READY, PICKED_UP, COMPLETED, CANCELLED, REJECTED
+
+  // Financial information
+  subtotal         Decimal  @default(0) @map("subtotal") @db.Decimal(10, 2)
+  platformFee      Decimal  @default(0) @map("platform_fee") @db.Decimal(10, 2)
+  tax              Decimal? @db.Decimal(10, 2)
+  tip              Decimal? @db.Decimal(10, 2)
+  totalAmount      Decimal  @map("total_amount") @db.Decimal(10, 2)
+
+  // Order details
+  itemCount        Int      @map("item_count")
+  items            Json     @default("[]") // Array of order items with modifiers
+
+  // Customer information
+  customerName     String?  @map("customer_name")
+  customerPhone    String?  @map("customer_phone")
+  customerNotes    String?  @map("customer_notes")
+
+  // Timestamps
+  receivedAt       DateTime @map("received_at")
+  acceptedAt       DateTime? @map("accepted_at")
+  prepStartedAt    DateTime? @map("prep_started_at")
+  readyAt          DateTime? @map("ready_at")
+  pickedUpAt       DateTime? @map("picked_up_at")
+  completedAt      DateTime? @map("completed_at")
+  cancelledAt      DateTime? @map("cancelled_at")
+
+  // Scheduled orders
+  scheduledPickupAt DateTime? @map("scheduled_pickup_at")
+  isScheduled       Boolean   @default(false) @map("is_scheduled")
+
+  // Prep time tracking
+  prepTimeEstimate  Int?     @map("prep_time_estimate") // estimated seconds
+  actualPrepTime    Int?     @map("actual_prep_time") // actual seconds (readyAt - prepStartedAt)
+
+  // Driver information
+  driverName       String?   @map("driver_name")
+  driverPhone      String?   @map("driver_phone")
+  driverVehicle    String?   @map("driver_vehicle")
+  driverLicensePlate String? @map("driver_license_plate")
+  driverPhotoUrl   String?   @map("driver_photo_url")
+  driverAssignedAt DateTime? @map("driver_assigned_at")
+  driverArrivedAt  DateTime? @map("driver_arrived_at")
+  driverEta        DateTime? @map("driver_eta")
+
+  // Cancellation/rejection
+  cancelReason     String?   @map("cancel_reason") // Reason code
+  cancelDetails    String?   @map("cancel_details") // Additional details
+  cancelledBy      String?   @map("cancelled_by") // CUSTOMER, PLATFORM, RESTAURANT
+
+  // Flags
+  autoAccepted     Boolean   @default(false) @map("auto_accepted")
+
+  // Platform-specific metadata
+  metadata         Json      @default("{}") // Additional platform-specific data
+
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  session GhostKitchenSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([externalOrderId, platform])
+  @@index([sessionId, status])
+  @@index([sessionId, receivedAt])
+  @@index([platform, status])
+  @@map("ghost_kitchen_orders")
+}
+
+/// Demand forecast for ghost kitchen planning
+model DemandForecast {
+  id               String   @id @default(uuid())
+  restaurantId     String   @map("restaurant_id")
+  date             DateTime @db.Date
+  hourSlot         Int      @map("hour_slot") // 0-23
+
+  // Forecasted values
+  dineInForecast   Int      @map("dine_in_forecast")
+  deliveryForecast Int      @map("delivery_forecast")
+
+  // Adjustment factors applied
+  weatherAdjustment Float   @default(0) @map("weather_adjustment") // -1 to +1
+  eventAdjustment   Float   @default(0) @map("event_adjustment") // -1 to +1
+
+  // Confidence score
+  confidence        Float   @default(0.5) // 0 to 1
+
+  // Actual values (filled after fact for ML training)
+  actualDineIn      Int?    @map("actual_dine_in")
+  actualDelivery    Int?    @map("actual_delivery")
+
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@unique([restaurantId, date, hourSlot])
+  @@index([restaurantId, date])
+  @@map("demand_forecasts")
+}
+
+/// Opportunity window for ghost kitchen mode
+model OpportunityWindow {
+  id               String   @id @default(uuid())
+  restaurantId     String   @map("restaurant_id")
+  date             DateTime @db.Date
+  startTime        String   @map("start_time") // HH:MM
+  endTime          String   @map("end_time") // HH:MM
+
+  // Scoring
+  score            Int      // 0-100 opportunity score
+
+  // Status
+  status           String   @default("SUGGESTED") // SUGGESTED, ACCEPTED, DECLINED, EXPIRED, IN_PROGRESS, COMPLETED
+
+  // Forecasted values
+  forecastedOrders Int      @map("forecasted_orders")
+
+  // Actual results (filled after completion)
+  actualOrders     Int?     @map("actual_orders")
+
+  // Staffing recommendation
+  recommendedStaff Int      @map("recommended_staff")
+
+  // Response tracking
+  notifiedAt       DateTime? @map("notified_at")
+  respondedAt      DateTime? @map("responded_at")
+
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@index([restaurantId, date])
+  @@index([restaurantId, status])
+  @@map("opportunity_windows")
+}
+
+// ==================== ML FORECASTING ====================
+
+/// ML model storage for demand forecasting
+model MLModel {
+  id               String   @id @default(uuid())
+  restaurantId     String   @map("restaurant_id")
+  version          Int      @default(1)
+
+  // Model type
+  modelType        String   @map("model_type") // LINEAR, GRADIENT_BOOST, ENSEMBLE
+
+  // Model parameters stored as JSON
+  weights          Json     @default("{}") // Model coefficients/weights
+  parameters       Json     @default("{}") // Hyperparameters and config
+  featureNames     String[] @map("feature_names") // Features used in training
+
+  // Training metrics
+  mae              Float?   // Mean Absolute Error
+  rmse             Float?   // Root Mean Square Error
+  mape             Float?   // Mean Absolute Percentage Error
+  r2Score          Float?   @map("r2_score") // R-squared score
+
+  // Training metadata
+  trainedAt        DateTime @default(now()) @map("trained_at")
+  dataPointsUsed   Int      @map("data_points_used")
+  trainingDuration Int?     @map("training_duration") // milliseconds
+
+  // Model status
+  status           String   @default("TRAINING") // TRAINING, ACTIVE, DEPRECATED, FAILED
+
+  // Prediction tracking
+  predictionsCount Int      @default(0) @map("predictions_count")
+  lastPredictionAt DateTime? @map("last_prediction_at")
+
+  // Performance monitoring
+  recentMae        Float?   @map("recent_mae") // MAE on recent predictions
+  accuracyTrend    String   @default("STABLE") @map("accuracy_trend") // IMPROVING, STABLE, DEGRADING
+
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@unique([restaurantId, version])
+  @@index([restaurantId, status])
+  @@index([restaurantId, trainedAt])
+  @@map("ml_models")
+}
+
+/// Cached event data for forecasting
+model CachedEvent {
+  id               String   @id @default(uuid())
+  externalId       String   @map("external_id")
+  source           String   // PREDICTHQ, TICKETMASTER, MANUAL
+
+  // Event details
+  name             String
+  category         String   // SPORTS, CONCERT, FESTIVAL, CONFERENCE, HOLIDAY, OTHER
+  subcategory      String?
+
+  // Location
+  lat              Decimal  @db.Decimal(10, 8)
+  lng              Decimal  @db.Decimal(11, 8)
+  venue            String?
+  city             String?
+  state            String?
+
+  // Timing
+  startTime        DateTime @map("start_time")
+  endTime          DateTime @map("end_time")
+  timezone         String?
+
+  // Impact estimation
+  expectedAttendance Int?   @map("expected_attendance")
+  rank             Int?     // Event significance ranking (1-5)
+
+  // Cache metadata
+  fetchedAt        DateTime @default(now()) @map("fetched_at")
+  expiresAt        DateTime @map("expires_at")
+
+  @@unique([externalId, source])
+  @@index([lat, lng, startTime])
+  @@index([city, state, startTime])
+  @@index([startTime, endTime])
+  @@map("cached_events")
+}
+
+/// Feature store for ML training data
+model FeatureSnapshot {
+  id               String   @id @default(uuid())
+  restaurantId     String   @map("restaurant_id")
+  date             DateTime @db.Date
+  hourSlot         Int      @map("hour_slot") // 0-23
+
+  // Target variables (actuals)
+  actualDineIn     Int?     @map("actual_dine_in")
+  actualDelivery   Int?     @map("actual_delivery")
+
+  // Temporal features
+  dayOfWeek        Int      @map("day_of_week") // 0-6
+  weekOfYear       Int      @map("week_of_year") // 1-52
+  monthOfYear      Int      @map("month_of_year") // 1-12
+  isWeekend        Boolean  @map("is_weekend")
+  isHoliday        Boolean  @default(false) @map("is_holiday")
+  holidayName      String?  @map("holiday_name")
+
+  // Weather features
+  temperature      Float?
+  feelsLike        Float?   @map("feels_like")
+  humidity         Float?
+  precipitation    Float?
+  windSpeed        Float?   @map("wind_speed")
+  cloudCover       Float?   @map("cloud_cover")
+  weatherCondition String?  @map("weather_condition")
+
+  // Event features
+  eventCount       Int      @default(0) @map("event_count")
+  totalAttendance  Int      @default(0) @map("total_attendance")
+  nearestEventDist Float?   @map("nearest_event_dist") // miles
+  eventImpactScore Float    @default(0) @map("event_impact_score")
+
+  // Lag features (previous periods)
+  lagDineIn1d      Int?     @map("lag_dine_in_1d") // Same hour yesterday
+  lagDineIn7d      Int?     @map("lag_dine_in_7d") // Same hour last week
+  lagDelivery1d    Int?     @map("lag_delivery_1d")
+  lagDelivery7d    Int?     @map("lag_delivery_7d")
+
+  // Rolling averages
+  avgDineIn7d      Float?   @map("avg_dine_in_7d") // 7-day average
+  avgDelivery7d    Float?   @map("avg_delivery_7d")
+  avgDineIn28d     Float?   @map("avg_dine_in_28d") // 4-week average
+  avgDelivery28d   Float?   @map("avg_delivery_28d")
+
+  // Trend features
+  dineInTrend      Float?   @map("dine_in_trend") // Week-over-week change
+  deliveryTrend    Float?   @map("delivery_trend")
+
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@unique([restaurantId, date, hourSlot])
+  @@index([restaurantId, date])
+  @@map("feature_snapshots")
+}
+
+// ==================== PAYMENTS / EARNED WAGE ACCESS ====================
+
+/// Instant pay enrollment for workers
+model InstantPayEnrollment {
+  id                   String    @id @default(uuid())
+  workerId             String    @unique @map("worker_id")
+  externalEmployeeId   String?   @map("external_employee_id") // DailyPay employee ID
+
+  // Enrollment status
+  status               String    @default("PENDING") // PENDING, ACTIVE, SUSPENDED, UNENROLLED
+
+  // Bank account verification
+  bankAccountVerified  Boolean   @default(false) @map("bank_account_verified")
+
+  // Enrollment dates
+  enrolledAt           DateTime  @default(now()) @map("enrolled_at")
+  activatedAt          DateTime? @map("activated_at")
+  suspendedAt          DateTime? @map("suspended_at")
+  unenrolledAt         DateTime? @map("unenrolled_at")
+
+  // Audit
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  workerProfile        WorkerProfile @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  transfers            InstantPayTransfer[]
+
+  @@index([status])
+  @@map("instant_pay_enrollments")
+}
+
+/// Instant pay transfer record
+model InstantPayTransfer {
+  id                   String    @id @default(uuid())
+  workerId             String    @map("worker_id")
+  restaurantId         String    @map("restaurant_id")
+  enrollmentId         String    @map("enrollment_id")
+
+  // Transfer details
+  amount               Decimal   @db.Decimal(10, 2)
+  fee                  Decimal   @db.Decimal(10, 2)
+  netAmount            Decimal   @map("net_amount") @db.Decimal(10, 2)
+  method               String    @default("INSTANT") // INSTANT, NEXT_DAY
+
+  // Status tracking
+  status               String    @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
+  requestedAt          DateTime  @default(now()) @map("requested_at")
+  processedAt          DateTime? @map("processed_at")
+
+  // External reference
+  externalTransferId   String?   @map("external_transfer_id") // DailyPay transfer ID
+
+  // Failure tracking
+  failureReason        String?   @map("failure_reason")
+  failureCode          String?   @map("failure_code")
+
+  // Audit
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  enrollment           InstantPayEnrollment @relation(fields: [enrollmentId], references: [id])
+
+  @@index([workerId, requestedAt])
+  @@index([restaurantId, requestedAt])
+  @@index([status])
+  @@index([externalTransferId])
+  @@map("instant_pay_transfers")
+}
+
+/// Worker earnings ledger from completed shifts
+model WorkerEarnings {
+  id                   String    @id @default(uuid())
+  workerId             String    @map("worker_id")
+  restaurantId         String    @map("restaurant_id")
+  shiftId              String    @unique @map("shift_id")
+
+  // Earnings details
+  hoursWorked          Decimal   @map("hours_worked") @db.Decimal(5, 2)
+  hourlyRate           Decimal   @map("hourly_rate") @db.Decimal(10, 2)
+  grossEarnings        Decimal   @map("gross_earnings") @db.Decimal(10, 2)
+  tips                 Decimal?  @db.Decimal(10, 2)
+  totalEarnings        Decimal   @map("total_earnings") @db.Decimal(10, 2)
+
+  // Timing
+  earnedAt             DateTime  @map("earned_at")
+
+  // Payout tracking
+  status               String    @default("AVAILABLE") // PENDING, AVAILABLE, PAID_OUT
+  paidOut              Boolean   @default(false) @map("paid_out")
+  paidOutAt            DateTime? @map("paid_out_at")
+  paidOutVia           String?   @map("paid_out_via") // INSTANT, REGULAR
+  transferId           String?   @map("transfer_id")
+
+  // Audit
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  workerProfile        WorkerProfile @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  restaurant           Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  shift                Shift         @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([workerId, earnedAt])
+  @@index([workerId, paidOut])
+  @@index([restaurantId, earnedAt])
+  @@index([status])
+  @@map("worker_earnings")
+}
+
+// ==================== MARKETPLACE ====================
+
+/// Trade offer posted to the marketplace
+model TradeOffer {
+  id               String    @id @default(uuid())
+  workerId         String    @map("worker_id")
+  shiftId          String    @map("shift_id")
+  restaurantId     String    @map("restaurant_id")
+
+  // Status: OPEN, MATCHED, TRADED, CANCELLED, EXPIRED
+  status           String    @default("OPEN")
+
+  // Trade preferences (what worker wants in return)
+  preferences      Json      @default("{}") // TradePreferences object
+
+  // Expiration
+  expiresAt        DateTime  @map("expires_at")
+
+  // Engagement metrics
+  viewCount        Int       @default(0) @map("view_count")
+  interestCount    Int       @default(0) @map("interest_count")
+
+  // Timestamps
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  worker           WorkerProfile @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  shift            Shift         @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  matches          TradeMatch[]
+
+  @@index([workerId, status])
+  @@index([restaurantId, status])
+  @@index([status, expiresAt])
+  @@map("trade_offers")
+}
+
+/// Trade match/proposal between two workers
+model TradeMatch {
+  id               String    @id @default(uuid())
+  offerId          String    @map("offer_id")
+  offererId        String    @map("offerer_id")
+  offererShiftId   String    @map("offerer_shift_id")
+  acceptorId       String    @map("acceptor_id")
+  acceptorShiftId  String    @map("acceptor_shift_id")
+
+  // Status: PROPOSED, ACCEPTED, REJECTED, COMPLETED, CANCELLED, EXPIRED
+  status           String    @default("PROPOSED")
+
+  // Proposal details
+  proposedAt       DateTime  @default(now()) @map("proposed_at")
+  respondedAt      DateTime? @map("responded_at")
+  completedAt      DateTime? @map("completed_at")
+  expiresAt        DateTime  @map("expires_at")
+
+  // Manager approval
+  managerApproval  Json      @default("{}") @map("manager_approval") // ManagerApproval object
+
+  // Matching
+  compatibilityScore Int?    @map("compatibility_score")
+  message          String?
+  rejectionReason  String?   @map("rejection_reason")
+
+  // Timestamps
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  offer            TradeOffer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  offerer          WorkerProfile @relation("TradeMatchOfferer", fields: [offererId], references: [id])
+  acceptor         WorkerProfile @relation("TradeMatchAcceptor", fields: [acceptorId], references: [id])
+  offererShift     Shift         @relation("TradeMatchOffererShift", fields: [offererShiftId], references: [id])
+  acceptorShift    Shift         @relation("TradeMatchAcceptorShift", fields: [acceptorShiftId], references: [id])
+
+  @@index([offerId, status])
+  @@index([offererId, status])
+  @@index([acceptorId, status])
+  @@index([status, expiresAt])
+  @@map("trade_matches")
+}
+
+/// Trade negotiation session for multi-step discussions
+model TradeNegotiation {
+  id               String    @id @default(uuid())
+  offer1Id         String    @map("offer_1_id")
+  offer2Id         String?   @map("offer_2_id")
+  participant1Id   String    @map("participant_1_id")
+  participant2Id   String    @map("participant_2_id")
+
+  // Status: ACTIVE, AGREED, CANCELLED, EXPIRED
+  status           String    @default("ACTIVE")
+
+  // Current negotiation terms
+  currentTerms     Json      @default("{}") @map("current_terms") // NegotiationTerms object
+
+  // Message history
+  messages         Json      @default("[]") // NegotiationMessage[]
+
+  // Turn tracking
+  pendingResponseFrom String? @map("pending_response_from")
+
+  // Activity tracking
+  participant1LastActiveAt DateTime? @map("participant_1_last_active_at")
+  participant2LastActiveAt DateTime? @map("participant_2_last_active_at")
+
+  // Cancellation
+  cancelledById    String?   @map("cancelled_by_id")
+  cancellationReason String? @map("cancellation_reason")
+
+  // Expiration
+  expiresAt        DateTime  @map("expires_at")
+
+  // Timestamps
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  participant1     WorkerProfile @relation("NegotiationParticipant1", fields: [participant1Id], references: [id])
+  participant2     WorkerProfile @relation("NegotiationParticipant2", fields: [participant2Id], references: [id])
+
+  @@index([participant1Id, status])
+  @@index([participant2Id, status])
+  @@index([status, expiresAt])
+  @@map("trade_negotiations")
+}
+
+// =============================================================================
+// ANALYTICS
+// =============================================================================
+
+/// Point-in-time analytics snapshot for trend analysis
+/// Captures daily metrics for historical comparison and reporting
+model AnalyticsSnapshot {
+  id               String   @id @default(uuid())
+  restaurantId     String   @map("restaurant_id")
+  date             DateTime @db.Date
+
+  // Labor metrics
+  laborCost        Decimal  @map("labor_cost") @db.Decimal(12, 2)
+  laborHours       Decimal  @map("labor_hours") @db.Decimal(10, 2)
+  overtimeCost     Decimal  @default(0) @map("overtime_cost") @db.Decimal(12, 2)
+  overtimeHours    Decimal  @default(0) @map("overtime_hours") @db.Decimal(10, 2)
+
+  // Revenue metrics
+  revenue          Decimal? @db.Decimal(12, 2)
+  laborPercent     Decimal? @map("labor_percent") @db.Decimal(5, 2)
+
+  // Forecast metrics
+  forecastAccuracy Decimal? @map("forecast_accuracy") @db.Decimal(5, 2)
+  forecastMape     Decimal? @map("forecast_mape") @db.Decimal(5, 2)
+
+  // Coverage metrics
+  coverageScore    Decimal? @map("coverage_score") @db.Decimal(5, 2)
+  shiftsScheduled  Int      @default(0) @map("shifts_scheduled")
+  shiftsCompleted  Int      @default(0) @map("shifts_completed")
+  shiftsCancelled  Int      @default(0) @map("shifts_cancelled")
+
+  // Worker metrics
+  workerCount      Int      @map("worker_count")
+  avgReliability   Decimal? @map("avg_reliability") @db.Decimal(3, 2)
+  avgPerformance   Decimal? @map("avg_performance") @db.Decimal(3, 2)
+
+  // Extended metadata (JSON for flexible additional metrics)
+  metadata         Json     @default("{}")
+
+  // Processing status
+  status           String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+
+  // Timestamps
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  restaurant       Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  // Constraints
+  @@unique([restaurantId, date])
+  @@index([restaurantId, date])
+  @@index([restaurantId, status])
+  @@index([date])
+  @@map("analytics_snapshots")
+}

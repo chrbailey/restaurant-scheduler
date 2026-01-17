@@ -1,0 +1,51 @@
+{
+  "name": "restaurant-scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Restaurant staff scheduling platform with multi-employer support and ghost kitchen capabilities",
+  "workspaces": [
+    "backend",
+    "mobile",
+    "web",
+    "shared"
+  ],
+  "pnpm": {
+    "overrides": {
+      "react-test-renderer>react": "18.3.1",
+      "react-test-renderer>scheduler": "^0.23.0",
+      "@testing-library/react-native>react-test-renderer": "18.3.1"
+    }
+  },
+  "scripts": {
+    "backend:dev": "npm run dev --workspace=backend",
+    "backend:build": "npm run build --workspace=backend",
+    "backend:test": "npm run test --workspace=backend",
+    "mobile:start": "npm run start --workspace=mobile",
+    "mobile:ios": "npm run ios --workspace=mobile",
+    "mobile:android": "npm run android --workspace=mobile",
+    "web:dev": "npm run dev --workspace=web",
+    "web:build": "npm run build --workspace=web",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "restaurant",
+    "scheduling",
+    "shift-management",
+    "ghost-kitchen"
+  ],
+  "author": "Christopher Bailey",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrbailey/restaurant-scheduler.git"
+  },
+  "bugs": {
+    "url": "https://github.com/chrbailey/restaurant-scheduler/issues"
+  },
+  "homepage": "https://github.com/chrbailey/restaurant-scheduler#readme"
+}

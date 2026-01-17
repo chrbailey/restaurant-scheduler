@@ -1,0 +1,77 @@
+# =============================================================================
+# Root .dockerignore for Restaurant Scheduler
+# =============================================================================
+
+# Dependencies (each package has its own node_modules)
+**/node_modules/
+
+# Build outputs
+**/dist/
+**/build/
+**/.next/
+
+# Development files
+**/.env
+**/.env.local
+**/.env.*.local
+!**/.env.example
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.vim
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
+**/coverage/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Docker files (avoid recursive copy)
+**/Dockerfile
+**/docker-compose*.yml
+**/.dockerignore
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Mobile app (not deployed via Docker)
+mobile/
+
+# Test files
+**/*.spec.ts
+**/*.spec.tsx
+**/*.test.ts
+**/*.test.tsx
+**/test/
+**/tests/
+**/__tests__/
+**/jest.config.*
+**/vitest.config.*
+
+# Misc
+*.tgz
+*.tar.gz
+*.zip
