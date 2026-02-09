@@ -23,7 +23,7 @@
     "@restaurant-scheduler/shared": "workspace:*",
     "@tanstack/react-query": "^5.0.0",
     "antd": "^5.21.0",
-    "axios": "^1.7.0",
+    "axios": "^1.13.5",
     "date-fns": "^4.0.0",
     "dayjs": "^1.11.0",
     "react": "^19.0.0",
