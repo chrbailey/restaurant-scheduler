@@ -11,6 +11,13 @@ shipped a 1.0 — every release should be treated as experimental.
 - `SECURITY.md` describing scope, reporting flow, and scaffold caveats.
 - `CHANGELOG.md` (this file).
 
+### Removed
+- `.github/workflows/release.yml`. The scaffold has no release pipeline —
+  no tags are pushed, no Docker images published to ghcr.io, no npm
+  artifacts built. The workflow was causing false-failure noise on every
+  push since early 2026 by running a zero-job validator path. If a real
+  release pipeline is added later, bring it back with proper tag triggers.
+
 ## [0.1.0] — 2026-01-18
 
 ### Added
